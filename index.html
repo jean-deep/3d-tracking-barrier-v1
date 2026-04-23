@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Controller Tracker - Barrera de Estacionamiento</title>
+    <title>3D Controller - Control por Eventos</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body {
@@ -68,13 +68,22 @@
             left: 50%;
             transform: translateX(-50%);
             width: 500px;
-            height: 400px;
+            height: 450px;
         }
 
         #three-container {
             width: 100%;
             height: 350px;
             background: #000;
+        }
+
+        #command-display {
+            padding: 10px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.2em;
+            background: #222;
+            color: #0078D7;
             border-bottom-left-radius: 8px;
             border-bottom-right-radius: 8px;
         }
@@ -198,13 +207,14 @@
 
     <!-- Modal de Instrucciones -->
     <div id="instruction-modal">
-        <h3 style="color: #0078D7;">Modo Control de Barrera</h3>
-        <p>Se requieren <strong>dos controladores</strong> configurados:</p>
+        <h3 style="color: #0078D7;">Control de Barrera por Gestos</h3>
+        <p>Sincronización requerida:</p>
         <ul style="text-align: left; font-size: 14px;">
-            <li><strong>Controlador de Acción:</strong> Debe estar visible para activar el mecanismo.</li>
-            <li><strong>Controlador de Ejecución:</strong> Muévelo arriba/abajo para rotar el brazo de la barrera.</li>
+            <li><strong>Mando Acción:</strong> Debe estar visible (Mantiene el sistema activo).</li>
+            <li><strong>Mando Ejecución:</strong> Realiza un movimiento rápido <strong>hacia arriba</strong> para abrir
+                o <strong>hacia abajo</strong> para cerrar.</li>
         </ul>
-        <button onclick="document.getElementById('instruction-modal').style.display='none'">Entendido</button>
+        <button onclick="document.getElementById('instruction-modal').style.display='none'">Comenzar</button>
     </div>
 
     <!-- Panel 3D -->
@@ -213,14 +223,15 @@
             <span>Visualizador 3D: Barrera</span>
         </div>
         <div id="three-container"></div>
+        <div id="command-display">SISTEMA LISTO</div>
     </div>
 
     <div id="setup-panel" class="panel">
         <div class="panel-header" id="setup-header">
-            <span>Configuración de Controladores</span>
+            <span>Configuración de Mandos</span>
         </div>
         <div class="panel-content">
-            <button onclick="addController()" style="width: 100%;">+ Nuevo Controlador</button>
+            <button onclick="addController()" style="width: 100%;">+ Nuevo Mando</button>
             <hr style="border: 0.5px solid #444; margin: 15px 0;">
             <div id="controllers-list"></div>
         </div>
@@ -228,10 +239,10 @@
 
     <div id="console-panel" class="panel">
         <div class="panel-header" id="console-header">
-            <span>Estado de Rastreo</span>
+            <span>Telemetría</span>
         </div>
         <div class="panel-content" id="console-output">
-            <p style="color: #888;">Esperando controladores...</p>
+            <p style="color: #888;">Configure mandos para iniciar...</p>
         </div>
     </div>
 
@@ -249,6 +260,11 @@
         let controllerIdCounter = 1;
         let calibratingId = null;
         let activeSettingsId = null;
+
+        // Estado de la Barrera
+        const BARRIER_STATES = { CLOSED: 0, OPEN: Math.PI / 2 };
+        let barrierTarget = BARRIER_STATES.CLOSED;
+        let currentCommand = "IDLE";
 
         // --- Video y Canvas 2D ---
         const video = document.getElementById('videoElement');
@@ -274,31 +290,20 @@
         renderer.setSize(500, 350);
         threeContainer.appendChild(renderer.domElement);
 
-        // Iluminación
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
         dirLight.position.set(5, 10, 7);
         scene.add(dirLight);
 
-        // Objetos 3D: La Barrera
+        // Geometría Barrera
         const barrierGroup = new THREE.Group();
-
-        // Base
-        const baseGeo = new THREE.BoxGeometry(1, 2, 1);
-        const baseMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        const base = new THREE.Mesh(baseGeo, baseMat);
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0x333333 }));
         barrierGroup.add(base);
 
-        // Brazo (Pivot)
         const armPivot = new THREE.Group();
-        armPivot.position.set(0, 0.7, 0.6); // Posición en la parte superior de la base
-
-        const armGeo = new THREE.BoxGeometry(4, 0.2, 0.2);
-        const armMat = new THREE.MeshStandardMaterial({ color: 0xffcc00 }); // Amarillo reflectante
-        const arm = new THREE.Mesh(armGeo, armMat);
-        arm.position.set(1.8, 0, 0); // Desplazar para que el pivot esté en el extremo
-
+        armPivot.position.set(0, 0.7, 0.6);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(4, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0xffcc00 }));
+        arm.position.set(1.8, 0, 0);
         armPivot.add(arm);
         barrierGroup.add(armPivot);
 
@@ -308,11 +313,13 @@
 
         function animate3D() {
             requestAnimationFrame(animate3D);
+            // Animación suave hacia el objetivo
+            armPivot.rotation.z += (barrierTarget - armPivot.rotation.z) * 0.08;
             renderer.render(scene, camera);
         }
         animate3D();
 
-        // --- Lógica de Arrastre de Paneles ---
+        // --- Draggable Paneles ---
         function makeDraggable(element, header) {
             let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
             header.onmousedown = (e) => {
@@ -333,7 +340,7 @@
         makeDraggable(document.getElementById('settings-panel'), document.getElementById('settings-header'));
         makeDraggable(document.getElementById('three-panel'), document.getElementById('three-header'));
 
-        // --- Gestión de Controladores ---
+        // --- Lógica de Controladores ---
         function addController() {
             const newCtrl = {
                 id: controllerIdCounter++,
@@ -341,22 +348,17 @@
                 color: null,
                 isTracked: false,
                 lastX: 0, lastY: 0,
-                settings: {
-                    tolerance: 45,
-                    minPixels: 20,
-                    skill: 'none' // 'none', 'action', 'execution'
-                }
+                prevY: 0, // Para detectar gestos
+                settings: { tolerance: 45, minPixels: 20, skill: 'none' }
             };
             controllers.push(newCtrl);
             renderSetupUI();
-            renderConsoleUI();
         }
 
         function deleteController(id) {
             controllers = controllers.filter(c => c.id !== id);
             if (activeSettingsId === id) closeSettings();
             renderSetupUI();
-            renderConsoleUI();
         }
 
         function startCalibration(id) {
@@ -381,28 +383,25 @@
             renderSetupUI();
         }
 
-        // --- Habilidades y Ajustes ---
         function openSettings(id) {
             activeSettingsId = id;
             const ctrl = controllers.find(c => c.id === id);
             const panel = document.getElementById('settings-panel');
             const content = document.getElementById('settings-content');
-
             document.getElementById('settings-title').innerText = `Ajustes: ${ctrl.name}`;
             content.innerHTML = `
                 <div style="font-size:12px; margin-bottom:10px;">
                     <label>Tolerancia de Color:</label>
                     <input type="range" min="10" max="150" value="${ctrl.settings.tolerance}" 
                         oninput="updateSetting(${id}, 'tolerance', this.value)">
-                    
-                    <label style="display:block; margin-top:10px;">Habilidad Especial:</label>
+                    <label style="display:block; margin-top:10px;">Función:</label>
                     <select onchange="updateSkill(${id}, this.value)">
                         <option value="none" ${ctrl.settings.skill === 'none' ? 'selected' : ''}>Ninguna</option>
-                        <option value="action" ${ctrl.settings.skill === 'action' ? 'selected' : ''}>Acción (Activar Sistema)</option>
-                        <option value="execution" ${ctrl.settings.skill === 'execution' ? 'selected' : ''}>Ejecución (Controlar Brazo)</option>
+                        <option value="action" ${ctrl.settings.skill === 'action' ? 'selected' : ''}>Acción (Presencia)</option>
+                        <option value="execution" ${ctrl.settings.skill === 'execution' ? 'selected' : ''}>Ejecución (Gestos)</option>
                     </select>
                 </div>
-                <button class="danger" style="width:100%" onclick="deleteController(${id})">Eliminar Mando</button>
+                <button class="danger" style="width:100%" onclick="deleteController(${id})">Eliminar</button>
             `;
             panel.style.display = 'flex';
         }
@@ -416,9 +415,8 @@
             const ctrl = controllers.find(c => c.id === id);
             if (ctrl) {
                 ctrl.settings.skill = skill;
-                if (skill !== 'none') {
-                    document.getElementById('instruction-modal').style.display = 'block';
-                }
+                if (skill !== 'none') document.getElementById('instruction-modal').style.display = 'block';
+                renderSetupUI();
             }
         }
 
@@ -434,16 +432,12 @@
                 let div = document.createElement('div');
                 div.className = 'controller-item';
                 div.style.borderLeftColor = c.color ? `rgb(${c.color.r},${c.color.g},${c.color.b})` : '#444';
-
-                let skillTag = c.settings.skill !== 'none' ? `<span style="font-size:10px; color:#0078D7; border:1px solid #0078D7; padding:1px 4px; border-radius:3px; margin-left:5px;">${c.settings.skill.toUpperCase()}</span>` : '';
-
+                let skillTag = c.settings.skill !== 'none' ? `<span style="font-size:9px; background:#0078D7; color:white; padding:2px 4px; border-radius:3px; margin-left:5px;">${c.settings.skill.toUpperCase()}</span>` : '';
                 let html = `<div><strong>${c.name}</strong> ${skillTag} <div class="color-swatch" style="background:${c.color ? `rgb(${c.color.r},${c.color.g},${c.color.b})` : 'transparent'}"></div></div>`;
                 if (calibratingId === c.id) {
-                    html += `<p style="font-size:11px; color:yellow;">Centra el color en el cuadro...</p>
-                             <button onclick="confirmCalibration(${c.id})">Capturar</button>`;
+                    html += `<p style="font-size:11px; color:yellow;">Apunte la cámara...</p><button onclick="confirmCalibration(${c.id})">Capturar</button>`;
                 } else {
-                    html += `<button onclick="startCalibration(${c.id})">Calibrar</button>
-                             <button onclick="openSettings(${c.id})">⚙️</button>`;
+                    html += `<button onclick="startCalibration(${c.id})">Calibrar</button><button onclick="openSettings(${c.id})">⚙️</button>`;
                 }
                 div.innerHTML = html;
                 list.appendChild(div);
@@ -457,16 +451,17 @@
             controllers.forEach(c => {
                 html += `<div style="font-size:12px; margin-bottom:5px;">
                     <div class="status-dot ${c.isTracked ? 'tracked' : ''}"></div>
-                    <strong>${c.name}:</strong> ${c.isTracked ? 'Rastreando' : 'Perdido'}
+                    <strong>${c.name}:</strong> ${c.isTracked ? 'OK' : 'PERDIDO'}
                 </div>`;
             });
             out.innerHTML = html;
         }
 
-        // --- Bucle de Procesamiento ---
+        // --- Procesamiento de Fotogramas y Gestos ---
+        const GESTURE_THRESHOLD = 30; // Píxeles de movimiento vertical para disparar
+
         function process() {
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                // Dibujar video espejo
                 ctx.save();
                 ctx.scale(-1, 1);
                 ctx.translate(-canvas.width, 0);
@@ -474,20 +469,18 @@
                 ctx.restore();
 
                 if (controllers.length > 0) {
-                    const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    const data = frameData.data;
+                    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 
                     controllers.forEach(c => {
                         c.sumX = 0; c.sumY = 0; c.matchCount = 0;
                         c.isTracked = false;
                     });
 
-                    // Muestreo rápido (salto de 4px)
-                    for (let y = 0; y < canvas.height; y += 4) {
-                        for (let x = 0; x < canvas.width; x += 4) {
+                    // Rastreo de color
+                    for (let y = 0; y < canvas.height; y += 5) {
+                        for (let x = 0; x < canvas.width; x += 5) {
                             let i = (y * canvas.width + x) * 4;
                             let r = data[i], g = data[i + 1], b = data[i + 2];
-
                             controllers.forEach(c => {
                                 if (c.color && calibratingId !== c.id) {
                                     let dist = Math.sqrt((r - c.color.r) ** 2 + (g - c.color.g) ** 2 + (b - c.color.b) ** 2);
@@ -499,8 +492,8 @@
                         }
                     }
 
-                    let actionActive = false;
-                    let executionLevel = 0.5; // Neutral
+                    let actionVisible = false;
+                    const cmdDisplay = document.getElementById('command-display');
 
                     controllers.forEach(c => {
                         if (c.color && c.matchCount > c.settings.minPixels) {
@@ -508,32 +501,41 @@
                             c.lastX = c.sumX / c.matchCount;
                             c.lastY = c.sumY / c.matchCount;
 
-                            // Dibujar Retícula
+                            // Dibujar UI en canvas
                             ctx.strokeStyle = `rgb(${c.color.r}, ${c.color.g}, ${c.color.b})`;
-                            ctx.lineWidth = 2;
-                            ctx.beginPath();
-                            ctx.arc(c.lastX, c.lastY, 20, 0, Math.PI * 2);
-                            ctx.stroke();
+                            ctx.beginPath(); ctx.arc(c.lastX, c.lastY, 25, 0, Math.PI * 2); ctx.stroke();
 
-                            // Lógica de Habilidades
-                            if (c.settings.skill === 'action') actionActive = true;
-                            if (c.settings.skill === 'execution') {
-                                // Normalizar posición Y (0 arriba, 1 abajo)
-                                executionLevel = c.lastY / canvas.height;
+                            if (c.settings.skill === 'action') actionVisible = true;
+
+                            // Detección de Gestos por Eventos
+                            if (c.settings.skill === 'execution' && c.prevY !== 0) {
+                                let deltaY = c.lastY - c.prevY;
+
+                                // Si hay un mando de acción activado, procesamos gestos
+                                if (actionVisible) {
+                                    if (deltaY < -GESTURE_THRESHOLD) { // Movimiento rápido ARRIBA (en cámara invertida)
+                                        barrierTarget = BARRIER_STATES.OPEN;
+                                        currentCommand = "ABRIENDO...";
+                                        cmdDisplay.style.color = "#4CAF50";
+                                    } else if (deltaY > GESTURE_THRESHOLD) { // Movimiento rápido ABAJO
+                                        barrierTarget = BARRIER_STATES.CLOSED;
+                                        currentCommand = "CERRANDO...";
+                                        cmdDisplay.style.color = "#F44336";
+                                    }
+                                }
                             }
+                            c.prevY = c.lastY;
+                        } else {
+                            c.prevY = 0; // Reset si se pierde el tracking
                         }
                     });
 
-                    // --- Aplicar Lógica 3D ---
-                    // Solo funciona si el de acción está visible
-                    if (actionActive) {
-                        // Invertimos el nivel: 0 abajo (brazo cerrado), 1 arriba (brazo abierto)
-                        let targetRotation = (1 - executionLevel) * (Math.PI / 2);
-                        // Suavizado (Lerp)
-                        armPivot.rotation.z += (targetRotation - armPivot.rotation.z) * 0.1;
+                    // Actualizar Display
+                    if (!actionVisible) {
+                        cmdDisplay.innerText = "BLOQUEADO - FALTA ACCIÓN";
+                        cmdDisplay.style.color = "#888";
                     } else {
-                        // Si no hay acción, la barrera cae lentamente por "gravedad"
-                        armPivot.rotation.z += (0 - armPivot.rotation.z) * 0.05;
+                        cmdDisplay.innerText = currentCommand;
                     }
 
                     renderConsoleUI();
