@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Controller Tracker - Barrera de Estacionamiento</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+        }
+
+        #videoElement {
+            display: none;
+        }
+
+        canvas#outputCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* Paneles */
+        .panel {
+            position: absolute;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid #444;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
+
+        .panel-header {
+            padding: 10px;
+            background: rgba(60, 60, 60, 0.9);
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            cursor: grab;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #555;
+            font-size: 0.9em;
+        }
+
+        .panel-content {
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        /* Panel 3D */
+        #three-panel {
+            top: 150px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 500px;
+            height: 400px;
+        }
+
+        #three-container {
+            width: 100%;
+            height: 350px;
+            background: #000;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+        }
+
+        #setup-panel {
+            top: 20px;
+            right: 20px;
+            width: 300px;
+        }
+
+        #console-panel {
+            top: 20px;
+            left: 20px;
+            width: 250px;
+        }
+
+        #settings-panel {
+            top: 450px;
+            right: 20px;
+            width: 300px;
+            display: none;
+        }
+
+        #instruction-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.95);
+            padding: 25px;
+            border: 2px solid #0078D7;
+            border-radius: 12px;
+            z-index: 100;
+            display: none;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        button {
+            background: #0078D7;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            margin: 2px;
+        }
+
+        button:hover {
+            background: #005A9E;
+        }
+
+        button.danger {
+            background: #d73a00;
+        }
+
+        .controller-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            border-left: 5px solid #444;
+        }
+
+        .color-swatch {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 8px;
+            border: 1px solid #fff;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #555;
+            margin-right: 6px;
+        }
+
+        .status-dot.tracked {
+            background: #00ff00;
+            box-shadow: 0 0 5px #00ff00;
+        }
+
+        #calibration-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px dashed #ffeb3b;
+            width: 50px;
+            height: 50px;
+            display: none;
+            pointer-events: none;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+            z-index: 5;
+        }
+
+        select,
+        input[type="range"] {
+            width: 100%;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 5px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <video id="videoElement" autoplay playsinline></video>
+    <canvas id="outputCanvas"></canvas>
+
+    <div id="calibration-overlay"></div>
+
+    <!-- Modal de Instrucciones -->
+    <div id="instruction-modal">
+        <h3 style="color: #0078D7;">Modo Control de Barrera</h3>
+        <p>Se requieren <strong>dos controladores</strong> configurados:</p>
+        <ul style="text-align: left; font-size: 14px;">
+            <li><strong>Controlador de Acción:</strong> Debe estar visible para activar el mecanismo.</li>
+            <li><strong>Controlador de Ejecución:</strong> Muévelo arriba/abajo para rotar el brazo de la barrera.</li>
+        </ul>
+        <button onclick="document.getElementById('instruction-modal').style.display='none'">Entendido</button>
+    </div>
+
+    <!-- Panel 3D -->
+    <div id="three-panel" class="panel">
+        <div class="panel-header" id="three-header">
+            <span>Visualizador 3D: Barrera</span>
+        </div>
+        <div id="three-container"></div>
+    </div>
+
+    <div id="setup-panel" class="panel">
+        <div class="panel-header" id="setup-header">
+            <span>Configuración de Controladores</span>
+        </div>
+        <div class="panel-content">
+            <button onclick="addController()" style="width: 100%;">+ Nuevo Controlador</button>
+            <hr style="border: 0.5px solid #444; margin: 15px 0;">
+            <div id="controllers-list"></div>
+        </div>
+    </div>
+
+    <div id="console-panel" class="panel">
+        <div class="panel-header" id="console-header">
+            <span>Estado de Rastreo</span>
+        </div>
+        <div class="panel-content" id="console-output">
+            <p style="color: #888;">Esperando controladores...</p>
+        </div>
+    </div>
+
+    <div id="settings-panel" class="panel">
+        <div class="panel-header" id="settings-header">
+            <span id="settings-title">Ajustes</span>
+            <span style="cursor:pointer;" onclick="closeSettings()">✖</span>
+        </div>
+        <div class="panel-content" id="settings-content"></div>
+    </div>
+
+    <script>
+        // --- Estado Global ---
+        let controllers = [];
+        let controllerIdCounter = 1;
+        let calibratingId = null;
+        let activeSettingsId = null;
+
+        // --- Video y Canvas 2D ---
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('outputCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { console.error("Error cámara:", err); });
+
+        // --- Configuración 3D (Three.js) ---
+        const threeContainer = document.getElementById('three-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, 500 / 350, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(500, 350);
+        threeContainer.appendChild(renderer.domElement);
+
+        // Iluminación
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // Objetos 3D: La Barrera
+        const barrierGroup = new THREE.Group();
+
+        // Base
+        const baseGeo = new THREE.BoxGeometry(1, 2, 1);
+        const baseMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const base = new THREE.Mesh(baseGeo, baseMat);
+        barrierGroup.add(base);
+
+        // Brazo (Pivot)
+        const armPivot = new THREE.Group();
+        armPivot.position.set(0, 0.7, 0.6); // Posición en la parte superior de la base
+
+        const armGeo = new THREE.BoxGeometry(4, 0.2, 0.2);
+        const armMat = new THREE.MeshStandardMaterial({ color: 0xffcc00 }); // Amarillo reflectante
+        const arm = new THREE.Mesh(armGeo, armMat);
+        arm.position.set(1.8, 0, 0); // Desplazar para que el pivot esté en el extremo
+
+        armPivot.add(arm);
+        barrierGroup.add(armPivot);
+
+        scene.add(barrierGroup);
+        camera.position.set(6, 4, 8);
+        camera.lookAt(0, 0, 0);
+
+        function animate3D() {
+            requestAnimationFrame(animate3D);
+            renderer.render(scene, camera);
+        }
+        animate3D();
+
+        // --- Lógica de Arrastre de Paneles ---
+        function makeDraggable(element, header) {
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            header.onmousedown = (e) => {
+                e.preventDefault();
+                pos3 = e.clientX; pos4 = e.clientY;
+                document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
+                document.onmousemove = (e) => {
+                    e.preventDefault();
+                    pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY;
+                    pos3 = e.clientX; pos4 = e.clientY;
+                    element.style.top = (element.offsetTop - pos2) + "px";
+                    element.style.left = (element.offsetLeft - pos1) + "px";
+                };
+            };
+        }
+        makeDraggable(document.getElementById('setup-panel'), document.getElementById('setup-header'));
+        makeDraggable(document.getElementById('console-panel'), document.getElementById('console-header'));
+        makeDraggable(document.getElementById('settings-panel'), document.getElementById('settings-header'));
+        makeDraggable(document.getElementById('three-panel'), document.getElementById('three-header'));
+
+        // --- Gestión de Controladores ---
+        function addController() {
+            const newCtrl = {
+                id: controllerIdCounter++,
+                name: `Mando ${controllerIdCounter - 1}`,
+                color: null,
+                isTracked: false,
+                lastX: 0, lastY: 0,
+                settings: {
+                    tolerance: 45,
+                    minPixels: 20,
+                    skill: 'none' // 'none', 'action', 'execution'
+                }
+            };
+            controllers.push(newCtrl);
+            renderSetupUI();
+            renderConsoleUI();
+        }
+
+        function deleteController(id) {
+            controllers = controllers.filter(c => c.id !== id);
+            if (activeSettingsId === id) closeSettings();
+            renderSetupUI();
+            renderConsoleUI();
+        }
+
+        function startCalibration(id) {
+            calibratingId = id;
+            document.getElementById('calibration-overlay').style.display = 'block';
+            renderSetupUI();
+        }
+
+        function confirmCalibration(id) {
+            const cx = Math.floor(canvas.width / 2);
+            const cy = Math.floor(canvas.height / 2);
+            const frame = ctx.getImageData(cx - 5, cy - 5, 10, 10);
+            let r = 0, g = 0, b = 0;
+            for (let i = 0; i < frame.data.length; i += 4) {
+                r += frame.data[i]; g += frame.data[i + 1]; b += frame.data[i + 2];
+            }
+            const count = frame.data.length / 4;
+            const ctrl = controllers.find(c => c.id === id);
+            ctrl.color = { r: Math.round(r / count), g: Math.round(g / count), b: Math.round(b / count) };
+            calibratingId = null;
+            document.getElementById('calibration-overlay').style.display = 'none';
+            renderSetupUI();
+        }
+
+        // --- Habilidades y Ajustes ---
+        function openSettings(id) {
+            activeSettingsId = id;
+            const ctrl = controllers.find(c => c.id === id);
+            const panel = document.getElementById('settings-panel');
+            const content = document.getElementById('settings-content');
+
+            document.getElementById('settings-title').innerText = `Ajustes: ${ctrl.name}`;
+            content.innerHTML = `
+                <div style="font-size:12px; margin-bottom:10px;">
+                    <label>Tolerancia de Color:</label>
+                    <input type="range" min="10" max="150" value="${ctrl.settings.tolerance}" 
+                        oninput="updateSetting(${id}, 'tolerance', this.value)">
+                    
+                    <label style="display:block; margin-top:10px;">Habilidad Especial:</label>
+                    <select onchange="updateSkill(${id}, this.value)">
+                        <option value="none" ${ctrl.settings.skill === 'none' ? 'selected' : ''}>Ninguna</option>
+                        <option value="action" ${ctrl.settings.skill === 'action' ? 'selected' : ''}>Acción (Activar Sistema)</option>
+                        <option value="execution" ${ctrl.settings.skill === 'execution' ? 'selected' : ''}>Ejecución (Controlar Brazo)</option>
+                    </select>
+                </div>
+                <button class="danger" style="width:100%" onclick="deleteController(${id})">Eliminar Mando</button>
+            `;
+            panel.style.display = 'flex';
+        }
+
+        function updateSetting(id, key, val) {
+            const ctrl = controllers.find(c => c.id === id);
+            if (ctrl) ctrl.settings[key] = parseInt(val);
+        }
+
+        function updateSkill(id, skill) {
+            const ctrl = controllers.find(c => c.id === id);
+            if (ctrl) {
+                ctrl.settings.skill = skill;
+                if (skill !== 'none') {
+                    document.getElementById('instruction-modal').style.display = 'block';
+                }
+            }
+        }
+
+        function closeSettings() {
+            activeSettingsId = null;
+            document.getElementById('settings-panel').style.display = 'none';
+        }
+
+        function renderSetupUI() {
+            const list = document.getElementById('controllers-list');
+            list.innerHTML = '';
+            controllers.forEach(c => {
+                let div = document.createElement('div');
+                div.className = 'controller-item';
+                div.style.borderLeftColor = c.color ? `rgb(${c.color.r},${c.color.g},${c.color.b})` : '#444';
+
+                let skillTag = c.settings.skill !== 'none' ? `<span style="font-size:10px; color:#0078D7; border:1px solid #0078D7; padding:1px 4px; border-radius:3px; margin-left:5px;">${c.settings.skill.toUpperCase()}</span>` : '';
+
+                let html = `<div><strong>${c.name}</strong> ${skillTag} <div class="color-swatch" style="background:${c.color ? `rgb(${c.color.r},${c.color.g},${c.color.b})` : 'transparent'}"></div></div>`;
+                if (calibratingId === c.id) {
+                    html += `<p style="font-size:11px; color:yellow;">Centra el color en el cuadro...</p>
+                             <button onclick="confirmCalibration(${c.id})">Capturar</button>`;
+                } else {
+                    html += `<button onclick="startCalibration(${c.id})">Calibrar</button>
+                             <button onclick="openSettings(${c.id})">⚙️</button>`;
+                }
+                div.innerHTML = html;
+                list.appendChild(div);
+            });
+        }
+
+        function renderConsoleUI() {
+            const out = document.getElementById('console-output');
+            if (controllers.length === 0) { out.innerHTML = '<p style="color:#888;">Sin mandos.</p>'; return; }
+            let html = '';
+            controllers.forEach(c => {
+                html += `<div style="font-size:12px; margin-bottom:5px;">
+                    <div class="status-dot ${c.isTracked ? 'tracked' : ''}"></div>
+                    <strong>${c.name}:</strong> ${c.isTracked ? 'Rastreando' : 'Perdido'}
+                </div>`;
+            });
+            out.innerHTML = html;
+        }
+
+        // --- Bucle de Procesamiento ---
+        function process() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                // Dibujar video espejo
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.translate(-canvas.width, 0);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                ctx.restore();
+
+                if (controllers.length > 0) {
+                    const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = frameData.data;
+
+                    controllers.forEach(c => {
+                        c.sumX = 0; c.sumY = 0; c.matchCount = 0;
+                        c.isTracked = false;
+                    });
+
+                    // Muestreo rápido (salto de 4px)
+                    for (let y = 0; y < canvas.height; y += 4) {
+                        for (let x = 0; x < canvas.width; x += 4) {
+                            let i = (y * canvas.width + x) * 4;
+                            let r = data[i], g = data[i + 1], b = data[i + 2];
+
+                            controllers.forEach(c => {
+                                if (c.color && calibratingId !== c.id) {
+                                    let dist = Math.sqrt((r - c.color.r) ** 2 + (g - c.color.g) ** 2 + (b - c.color.b) ** 2);
+                                    if (dist < c.settings.tolerance) {
+                                        c.sumX += x; c.sumY += y; c.matchCount++;
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    let actionActive = false;
+                    let executionLevel = 0.5; // Neutral
+
+                    controllers.forEach(c => {
+                        if (c.color && c.matchCount > c.settings.minPixels) {
+                            c.isTracked = true;
+                            c.lastX = c.sumX / c.matchCount;
+                            c.lastY = c.sumY / c.matchCount;
+
+                            // Dibujar Retícula
+                            ctx.strokeStyle = `rgb(${c.color.r}, ${c.color.g}, ${c.color.b})`;
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(c.lastX, c.lastY, 20, 0, Math.PI * 2);
+                            ctx.stroke();
+
+                            // Lógica de Habilidades
+                            if (c.settings.skill === 'action') actionActive = true;
+                            if (c.settings.skill === 'execution') {
+                                // Normalizar posición Y (0 arriba, 1 abajo)
+                                executionLevel = c.lastY / canvas.height;
+                            }
+                        }
+                    });
+
+                    // --- Aplicar Lógica 3D ---
+                    // Solo funciona si el de acción está visible
+                    if (actionActive) {
+                        // Invertimos el nivel: 0 abajo (brazo cerrado), 1 arriba (brazo abierto)
+                        let targetRotation = (1 - executionLevel) * (Math.PI / 2);
+                        // Suavizado (Lerp)
+                        armPivot.rotation.z += (targetRotation - armPivot.rotation.z) * 0.1;
+                    } else {
+                        // Si no hay acción, la barrera cae lentamente por "gravedad"
+                        armPivot.rotation.z += (0 - armPivot.rotation.z) * 0.05;
+                    }
+
+                    renderConsoleUI();
+                }
+            }
+            requestAnimationFrame(process);
+        }
+
+        requestAnimationFrame(process);
+    </script>
+</body>
+
+</html>
